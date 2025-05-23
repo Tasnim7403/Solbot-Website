@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200px" height="200px" viewBox="0 0 200 200" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <g id="Robot-Logo" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <rect id="Background" fill="#000080" x="0" y="0" width="200" height="200" rx="10"></rect>
+        <g id="Robot" transform="translate(40, 40)">
+            <!-- Robot Head -->
+            <rect id="Head" fill="#A0D2F3" x="30" y="10" width="60" height="50" rx="10"></rect>
+            
+            <!-- Robot Eyes -->
+            <circle id="Left-Eye" fill="#FFFFFF" cx="50" cy="30" r="8"></circle>
+            <circle id="Right-Eye" fill="#FFFFFF" cx="70" cy="30" r="8"></circle>
+            <circle id="Left-Pupil" fill="#000080" cx="50" cy="30" r="4"></circle>
+            <circle id="Right-Pupil" fill="#000080" cx="70" cy="30" r="4"></circle>
+            
+            <!-- Robot Antenna -->
+            <circle id="Antenna-Top" fill="#FF5252" cx="60" cy="5" r="5"></circle>
+            <rect id="Antenna" fill="#A0D2F3" x="57" y="5" width="6" height="10"></rect>
+            
+            <!-- Robot Body -->
+            <rect id="Body" fill="#A0D2F3" x="25" y="65" width="70" height="50" rx="5"></rect>
+            
+            <!-- Robot Arms -->
+            <rect id="Left-Arm" fill="#A0D2F3" x="10" y="70" width="15" height="40" rx="5"></rect>
+            <rect id="Right-Arm" fill="#A0D2F3" x="95" y="70" width="15" height="40" rx="5"></rect>
+            
+            <!-- Robot Legs -->
+            <rect id="Left-Leg" fill="#A0D2F3" x="35" y="115" width="15" height="25" rx="5"></rect>
+            <rect id="Right-Leg" fill="#A0D2F3" x="70" y="115" width="15" height="25" rx="5"></rect>
+            
+            <!-- Robot Panel -->
+            <rect id="Panel" fill="#FFFFFF" x="40" y="75" width="40" height="20" rx="3"></rect>
+            <text id="BOT" font-family="Arial-BoldMT, Arial" font-size="14" font-weight="bold" fill="#000080">
+                <tspan x="48" y="90">BOT</tspan>
+            </text>
+        </g>
+    </g>
+</svg>
