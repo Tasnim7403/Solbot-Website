@@ -6,9 +6,49 @@ const moment = require('moment-timezone');
 // Add a new reading (from ESP32)
 exports.addReading = async (req, res) => {
     try {
-        const { currentAmps, energyProduction, battery, temperature, humidity, windSpeed, precipitation } = req.body;
-        const efficiency = (currentAmps / 3.0) * 100; // Example formula
-        const reading = new EnergyReading({ currentAmps, energyProduction, efficiency });
+        // Accept both 'currentAmps'/'voltageVolts' and 'current'/'voltage' for compatibility
+        const currentAmps = req.body.currentAmps !== undefined ? req.body.currentAmps : req.body.current;
+        const voltageVolts = req.body.voltageVolts !== undefined ? req.body.voltageVolts : req.body.voltage;
+        // Use measured power from ESP32 (prefer req.body.power or req.body.energyProduction)
+        const measuredPower = req.body.power !== undefined ? req.body.power : (req.body.energyProduction !== undefined ? req.body.energyProduction : (currentAmps * voltageVolts));
+
+        // Get the most recent previous reading
+        const previousReading = await EnergyReading.findOne({}, {}, { sort: { timestamp: -1 } });
+        let energyWh = 0;
+        let energyTheoreticalWh = 0;
+        let prevTimestamp = null;
+        let prevPower = null;
+        const nowTimestamp = req.body.timestamp ? new Date(req.body.timestamp) : new Date();
+        if (previousReading) {
+            prevTimestamp = previousReading.timestamp;
+            prevPower = previousReading.power;
+            const deltaT = (nowTimestamp - prevTimestamp) / 1000; // seconds
+            if (prevPower !== undefined && prevPower !== null && deltaT > 0) {
+                energyWh = prevPower * (deltaT / 3600);
+                // Theoretical calculation (optional, set to 0 if not needed)
+                const surface = 0.0049; // m²
+                const irradiance = 200; // W/m² (modifiable)
+                energyTheoreticalWh = irradiance * surface * (deltaT / 3600);
+            }
+        }
+        // Calculate efficiency using the general formula
+        let efficiency = 0;
+        if (energyTheoreticalWh > 0) {
+            efficiency = (energyWh / energyTheoreticalWh) * 100;
+        }
+        // Prepare all possible fields for compatibility and clarity
+        const reading = new EnergyReading({
+            currentAmps: req.body.currentAmps !== undefined ? req.body.currentAmps : req.body.current,
+            current: req.body.current !== undefined ? req.body.current : req.body.currentAmps,
+            voltageVolts: req.body.voltageVolts !== undefined ? req.body.voltageVolts : req.body.voltage,
+            voltage: req.body.voltage !== undefined ? req.body.voltage : req.body.voltageVolts,
+            power: req.body.power !== undefined ? req.body.power : (currentAmps * voltageVolts),
+            energyProduction: measuredPower,
+            efficiency,
+            timestamp: nowTimestamp,
+            energyWh: energyWh,
+            energyTheoreticalWh: energyTheoreticalWh
+        });
         await reading.save();
 
         // Notification logic
@@ -83,115 +123,87 @@ exports.getAggregatedReadings = async (req, res) => {
         let refDate = date ? moment.tz(date, tz) : moment.tz(tz);
 
         if (filter === 'day') {
-            // Group by 30-minute interval for the selected day
+            // Get all readings for the day in the requested timezone
+            const start = refDate.clone().tz(tz).startOf('day').utc().toDate();
+            const end = refDate.clone().tz(tz).endOf('day').utc().toDate();
+            console.log('[DEBUG] Day filter:', { start, end, tz, refDate: refDate.format() });
             match = {
                 timestamp: {
-                    $gte: refDate.clone().startOf('day').toDate(),
-                    $lt: refDate.clone().endOf('day').toDate()
+                    $gte: start,
+                    $lt: end
                 }
             };
-            group = {
-                _id: {
-                    hour: { $hour: { date: '$timestamp', timezone: tz } },
-                    halfHour: {
-                        $cond: [
-                            { $lt: [{ $minute: { date: '$timestamp', timezone: tz } }, 30] },
-                            0,
-                            30
-                        ]
-                    }
-                },
-                avgCurrent: { $avg: '$currentAmps' },
-                avgEfficiency: { $avg: '$efficiency' },
-                firstTimestamp: { $min: '$timestamp' }
-            };
-            project = {
-                _id: 0,
-                hour: '$_id.hour',
-                halfHour: '$_id.halfHour',
-                avgCurrent: 1,
-                avgEfficiency: 1,
-                timestamp: '$firstTimestamp'
-            };
-            sort = { hour: 1, halfHour: 1 };
+            let readings = await EnergyReading.find(match).sort({ timestamp: 1 });
+            console.log(`[DEBUG] Found ${readings.length} readings for day filter.`);
+            if (readings.length > 0) {
+                console.log('[DEBUG] Reading timestamps:', readings.map(r => r.timestamp));
+            }
+            // Removed fallback to previous day: if no readings, just return empty
+            const result = readings.map(r => ({
+                timestamp: r.timestamp,
+                energy: r.energyWh || 0,
+                efficiency: r.efficiency || 0,
+                current: r.current || r.currentAmps || 0
+            }));
+            res.json(result);
+            return;
         } else if (filter === 'week') {
-            // Group by day for the selected week
+            // Group by day for the selected week (force UTC)
             match = {
                 timestamp: {
-                    $gte: refDate.clone().startOf('week').toDate(),
-                    $lt: refDate.clone().endOf('week').toDate()
+                    $gte: refDate.clone().utc().startOf('week').toDate(),
+                    $lt: refDate.clone().utc().endOf('week').toDate()
                 }
             };
-            group = {
-                _id: { day: { $dayOfMonth: { date: '$timestamp', timezone: tz } } },
-                avgCurrent: { $avg: '$currentAmps' },
-                avgEnergy: { $avg: '$energyProduction' },
-                avgEfficiency: { $avg: '$efficiency' },
-                firstTimestamp: { $min: '$timestamp' }
-            };
-            project = {
-                _id: 0,
-                day: '$_id.day',
-                avgCurrent: 1,
-                avgEnergy: 1,
-                avgEfficiency: 1,
-                timestamp: '$firstTimestamp'
-            };
-            sort = { day: 1 };
+            const readings = await EnergyReading.find(match).sort({ timestamp: 1 });
+            // Group readings by day
+            const days = {};
+            readings.forEach(r => {
+                const day = r.timestamp.toISOString().slice(0, 10);
+                if (!days[day]) days[day] = [];
+                days[day].push(r);
+            });
+            const result = Object.entries(days).map(([day, dayReadings]) => {
+                const totalEnergy = dayReadings.reduce((sum, r) => sum + (r.energyWh || 0), 0);
+                const avgEfficiency = dayReadings.length ? dayReadings.reduce((sum, r) => sum + (r.efficiency || 0), 0) / dayReadings.length : 0;
+                return {
+                    day,
+                    energy: Number(totalEnergy.toFixed(4)),
+                    efficiency: Number(avgEfficiency.toFixed(2)),
+                    count: dayReadings.length,
+                    timestamp: dayReadings[0].timestamp
+                };
+            });
+            res.json(result);
+            return;
         } else if (filter === 'month') {
-            // Group by week of month for the selected month
+            // Group by week of month for the selected month (force UTC)
             match = {
                 timestamp: {
-                    $gte: refDate.clone().startOf('month').toDate(),
-                    $lt: refDate.clone().endOf('month').toDate()
+                    $gte: refDate.clone().utc().startOf('month').toDate(),
+                    $lt: refDate.clone().utc().endOf('month').toDate()
                 }
             };
-            group = {
-                _id: {
-                    weekOfMonth: {
-                        $ceil: {
-                            $divide: [
-                                {
-                                    $add: [
-                                        { $dayOfMonth: { date: '$timestamp', timezone: tz } },
-                                        {
-                                            $subtract: [
-                                                {
-                                                    $dayOfWeek: {
-                                                        date: {
-                                                            $dateFromParts: {
-                                                                year: { $year: { date: '$timestamp', timezone: tz } },
-                                                                month: { $month: { date: '$timestamp', timezone: tz } },
-                                                                day: 1,
-                                                                timezone: tz
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                1
-                                            ]
-                                        }
-                                    ]
-                                },
-                                7
-                            ]
-                        }
-                    }
-                },
-                avgCurrent: { $avg: '$currentAmps' },
-                avgEnergy: { $avg: '$energyProduction' },
-                avgEfficiency: { $avg: '$efficiency' },
-                firstTimestamp: { $min: '$timestamp' }
-            };
-            project = {
-                _id: 0,
-                week: '$_id.weekOfMonth',
-                avgCurrent: 1,
-                avgEnergy: 1,
-                avgEfficiency: 1,
-                timestamp: '$firstTimestamp'
-            };
-            sort = { week: 1 };
+            const readings = await EnergyReading.find(match).sort({ timestamp: 1 });
+            // Group readings by week number (1-4)
+            const weeks = { 1: [], 2: [], 3: [], 4: [] };
+            readings.forEach(r => {
+                const weekNum = Math.min(4, Math.ceil((r.timestamp.getDate() - 1) / 7) + 1);
+                weeks[weekNum].push(r);
+            });
+            const result = Object.entries(weeks).map(([week, weekReadings]) => {
+                const totalEnergy = weekReadings.reduce((sum, r) => sum + (r.energyWh || 0), 0);
+                const avgEfficiency = weekReadings.length ? weekReadings.reduce((sum, r) => sum + (r.efficiency || 0), 0) / weekReadings.length : 0;
+                return {
+                    week: Number(week),
+                    energy: Number(totalEnergy.toFixed(4)),
+                    efficiency: Number(avgEfficiency.toFixed(2)),
+                    count: weekReadings.length,
+                    timestamp: weekReadings[0] ? weekReadings[0].timestamp : null
+                };
+            });
+            res.json(result);
+            return;
         } else {
             return res.status(400).json({ error: 'Invalid filter type' });
         }

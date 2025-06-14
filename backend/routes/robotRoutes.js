@@ -8,4 +8,10 @@ const robotController = require('../controllers/robotController');
 router.get('/signal-strength', robotController.getSignalStrength);
 router.put('/signal-strength', robotController.updateSignalStrength);
 
+// Map data route
+router.get('/map-data', robotController.getMapData);
+
+// Status route
+router.get('/status', robotController.getRobotStatus);
+
 module.exports = router; 

@@ -331,19 +331,32 @@ const anomalyBarColors = [
   '#8e24aa', // Purple
 ];
 
+// Type for energy data points used in the trend chart (copied from Dashboard)
+type EnergyDataPoint = {
+  timestamp: number | string;
+  avgCurrent?: number;
+  avgEnergy?: number;
+  avgEfficiency?: number;
+  current?: number;
+  currentAmps?: number;
+  energy?: number;
+  efficiency?: number;
+  [key: string]: any;
+};
+
 const ReportsPage: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const navigate = useNavigate();
 
-  const [energyData, setEnergyData] = useState([]);
+  const [energyData, setEnergyData] = useState<EnergyDataPoint[]>([]);
   const [anomaliesTypeData, setAnomaliesTypeData] = useState([]);
   const [anomalyRows, setAnomalyRows] = useState<AnomalyRow[]>([]);
   const [filteredRows, setFilteredRows] = useState<AnomalyRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterDate, setFilterDate] = useState<string>(''); // yyyy-mm-dd
-  const [timeRange, setTimeRange] = useState(() => localStorage.getItem(FILTER_KEY) || 'week');
+  const [timeRange, setTimeRange] = useState(() => localStorage.getItem('dashboard_timeRange') || 'week');
   const [filterAnchorEl, setFilterAnchorEl] = useState<HTMLElement | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date());
 
@@ -469,11 +482,21 @@ const ReportsPage: React.FC = () => {
   };
 
   const fetchEnergyData = async (range: string, date: Date) => {
-    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const dateStr = moment(date).tz(userTimezone).format('YYYY-MM-DD');
+    // Use local time for the date string
+    const dateStr = moment(date).format('YYYY-MM-DD');
     try {
-      const res = await axios.get(`http://localhost:5000/api/energy/aggregate?filter=${range}&date=${dateStr}&timezone=${encodeURIComponent(userTimezone)}`);
-      setEnergyData(res.data);
+      const res = await axios.get(`http://localhost:5000/api/energy/aggregate?filter=${range}&date=${dateStr}&timezone=Africa/Tunis`);
+      let filtered = res.data;
+      if (range === 'month') {
+        filtered = res.data.filter((d: any) => d.count > 0 && d.timestamp);
+      }
+      const mapped = filtered.map((d: any) => ({
+        ...d,
+        avgCurrent: d.current ?? d.currentAmps ?? null,
+        avgEnergy: d.energy ?? null,
+        avgEfficiency: d.efficiency ?? null,
+      }));
+      setEnergyData(mapped);
     } catch (err) {
       setEnergyData([]);
       console.error('Failed to fetch energy data:', err);
@@ -483,6 +506,19 @@ const ReportsPage: React.FC = () => {
   useEffect(() => {
     fetchEnergyData(timeRange, selectedDate);
   }, [timeRange, selectedDate]);
+
+  const validEnergyData = energyData
+    .map(d => ({
+      ...d,
+      timestamp: typeof d.timestamp === 'string' ? new Date(d.timestamp).getTime() : d.timestamp
+    }))
+    .filter(
+      d =>
+        d &&
+        typeof d.timestamp === 'number' &&
+        !isNaN(d.timestamp)
+    );
+  const allDataValid = validEnergyData.length > 0;
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -520,50 +556,48 @@ const ReportsPage: React.FC = () => {
           {/* Performance Section */}
           <Box sx={{ mb: 2 }}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <ChartContainer isMobile={isMobile} sx={{ mt: 2, mb: 4 }}>
-                <Box className="chart-header">
-                  <Typography variant="h6" fontWeight="600" sx={{ mb: 3 }}>Solar Panel Energy Production Trend</Typography>
+              <ChartContainer isMobile={isMobile} sx={{ mt: isMobile ? 1 : 4, overflowX: isMobile ? 'auto' : 'visible', minWidth: isMobile ? 320 : 'unset' }}>
+                <Box className="chart-header" sx={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'flex-start' : 'center' }}>
+                  <Typography variant={isMobile ? 'subtitle1' : 'h6'} fontWeight="600">Solar Panel Energy Production Trend</Typography>
                   <Box>
-                    <Box className="pdf-hide-filter pdf-hide" ref={filterRef} sx={{ display: 'inline-block' }}>
-                      <Button 
-                        variant="text" 
-                        color="primary" 
-                        size="medium"
-                        onClick={handleFilterClick}
-                        endIcon={<FilterIcon />}
-                        sx={{
-                          fontSize: '1.1rem',
-                          padding: '8px 20px',
-                          minWidth: '110px',
-                          fontWeight: 600
-                        }}
-                      >
-                        {timeRange.charAt(0).toUpperCase() + timeRange.slice(1)}
-                      </Button>
-                      <Menu
-                        anchorEl={filterAnchorEl}
-                        open={Boolean(filterAnchorEl)}
-                        onClose={handleFilterClose}
-                      >
-                        <MenuItem onClick={() => handleFilter('day')}>Day</MenuItem>
-                        <MenuItem onClick={() => handleFilter('week')}>Week</MenuItem>
-                        <MenuItem onClick={() => handleFilter('month')}>Month</MenuItem>
-                      </Menu>
-                    </Box>
+                    <Button 
+                      variant="text" 
+                      color="primary" 
+                      size="medium"
+                      onClick={e => setFilterAnchorEl(e.currentTarget)}
+                      endIcon={<FilterIcon />}
+                      sx={{
+                        fontSize: isMobile ? '0.95rem' : '1.1rem',
+                        padding: isMobile ? '6px 10px' : '8px 20px',
+                        minWidth: isMobile ? '80px' : '110px',
+                        fontWeight: 600
+                      }}
+                    >
+                      {timeRange.charAt(0).toUpperCase() + timeRange.slice(1)}
+                    </Button>
+                    <Menu
+                      anchorEl={filterAnchorEl}
+                      open={Boolean(filterAnchorEl)}
+                      onClose={() => setFilterAnchorEl(null)}
+                    >
+                      <MenuItem onClick={() => { setTimeRange('day'); setFilterAnchorEl(null); }}>Day</MenuItem>
+                      <MenuItem onClick={() => { setTimeRange('week'); setFilterAnchorEl(null); }}>Week</MenuItem>
+                      <MenuItem onClick={() => { setTimeRange('month'); setFilterAnchorEl(null); }}>Month</MenuItem>
+                    </Menu>
                   </Box>
                 </Box>
-                <RechartsResponsiveContainer width="100%" height={isMobile ? 400 : 450} isMobile={isMobile}>
+                <RechartsResponsiveContainer width="100%" height={isMobile ? 300 : 450} isMobile={isMobile}>
                   <LineChart
-                    data={energyData}
-                    margin={{ 
-                      top: 5, 
-                      right: isMobile ? 15 : 35, 
-                      left: isMobile ? 0 : 25, 
-                      bottom: 0 
+                    data={allDataValid ? validEnergyData : []}
+                    margin={{
+                      top: 5,
+                      right: 40,
+                      left: 60,
+                      bottom: 0
                     }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis
+                    <XAxis 
                       dataKey={
                         timeRange === 'day'
                           ? 'timestamp'
@@ -574,7 +608,7 @@ const ReportsPage: React.FC = () => {
                       tickFormatter={value => {
                         if (timeRange === 'day') {
                           const d = new Date(value);
-                          return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes() < 30 ? '00' : '30'} UTC`;
+                          return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes() < 30 ? '00' : '30'}`;
                         }
                         if (timeRange === 'week') return `Day ${value}`;
                         if (timeRange === 'month') return `Week ${value}`;
@@ -583,39 +617,65 @@ const ReportsPage: React.FC = () => {
                       tick={{ fontSize: isMobile ? 10 : 12 }}
                       axisLine={{ stroke: '#e0e0e0' }}
                     />
-                    <YAxis
-                      tick={{ fontSize: isMobile ? 10 : 12 }}
+                    <YAxis 
+                      yAxisId="left"
+                      tick={{ fontSize: isMobile ? 14 : 16 }}
                       axisLine={{ stroke: '#e0e0e0' }}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-                        border: 'none'
+                      label={{
+                        value: 'Energy Production (kWh)',
+                        angle: -90,
+                        position: 'insideLeft',
+                        offset: 0,
+                        fontSize: isMobile ? 14 : 16,
+                        fill: '#000080',
+                        fontWeight: 700
                       }}
                     />
-                    <Legend
-                      verticalAlign="top"
+                    <YAxis 
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fontSize: isMobile ? 14 : 16 }}
+                      axisLine={{ stroke: '#e0e0e0' }}
+                      label={{
+                        value: 'Efficiency (%)',
+                        angle: 90,
+                        position: 'insideRight',
+                        offset: 0,
+                        fontSize: isMobile ? 14 : 16,
+                        fill: '#4caf50',
+                        fontWeight: 700
+                      }}
+                    />
+                    <Tooltip 
+                      formatter={(value, name) => {
+                        if (name === 'Energy Production (kW)' || name === 'Energy Production (kWh)') {
+                          return [`${value} kWh`, 'Energy Production (kWh)'];
+                        }
+                        if (name === 'Efficiency (%)') {
+                          return [`${value} %`, 'Efficiency (%)'];
+                        }
+                        return [value, name];
+                      }}
+                      contentStyle={{ 
+                        borderRadius: '8px', 
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+                        border: 'none'
+                      }} 
+                    />
+                    <Legend 
+                      verticalAlign="top" 
                       height={36}
                       iconType="circle"
                     />
                     <Line
-                      name="Current (A)"
-                      type="monotone"
-                      dataKey="avgCurrent"
-                      stroke="#000080"
-                      strokeWidth={2}
-                      dot={{ r: 6, strokeWidth: 2 }}
-                      activeDot={{ r: 8, strokeWidth: 2 }}
-                    />
-                    <Line
-                      name="Energy Production (kW)"
+                      name="Energy Production (kWh)"
                       type="monotone"
                       dataKey="avgEnergy"
                       stroke="#000080"
                       strokeWidth={2}
                       dot={{ r: isMobile ? 4 : 6, strokeWidth: 2 }}
                       activeDot={{ r: isMobile ? 6 : 8, strokeWidth: 2 }}
+                      yAxisId="left"
                     />
                     <Line
                       name="Efficiency (%)"
@@ -625,6 +685,7 @@ const ReportsPage: React.FC = () => {
                       strokeWidth={2}
                       dot={{ r: isMobile ? 4 : 6, strokeWidth: 2 }}
                       activeDot={{ r: isMobile ? 6 : 8, strokeWidth: 2 }}
+                      yAxisId="right"
                     />
                   </LineChart>
                 </RechartsResponsiveContainer>

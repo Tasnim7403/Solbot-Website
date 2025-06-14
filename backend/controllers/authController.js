@@ -130,10 +130,9 @@ exports.forgotPassword = async (req, res) => {
           <p>Hello,</p>
           <p>You requested a password reset for your SolBot account.</p>
           <p>Please click the button below to reset your password:</p>
-          <p style="text-align: center;">
-            <a href="${resetUrl}" style="display: inline-block; background-color: #000080; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">Reset Password</a>
-          </p>
-          <p>If you didn't request this, please ignore this email.</p>
+          <div style="display: flex; justify-content: center; align-items: center; margin: 24px 0;">
+            <a href="${resetUrl}" style="display: inline-block; background-color: #000080; color: white; padding: 12px 32px; text-decoration: none; border-radius: 4px; font-size: 16px; font-weight: bold;">Reset Password</a>
+          </div>
           <p>This link will expire in 10 minutes.</p>
           <hr style="border: 1px solid #eee;">
           <p style="font-size: 12px; color: #666;">SolBot Team</p>

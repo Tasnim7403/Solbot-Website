@@ -21,4 +21,20 @@ exports.updateSignalStrength = async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+};
+
+exports.getMapData = async (req, res) => {
+    try {
+        res.json({ mapData: global.cachedMapData });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+exports.getRobotStatus = async (req, res) => {
+    try {
+        res.json({ connected: global.robotIsConnected });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 }; 

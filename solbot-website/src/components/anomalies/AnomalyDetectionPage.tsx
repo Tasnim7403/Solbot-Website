@@ -253,6 +253,18 @@ const AnomalyDetectionPage: React.FC = () => {
     setModalImage(null);
   };
 
+  const shouldHideImage = (row: any) => {
+    // Format date as yyyy-mm-dd for comparison
+    const date = new Date(row.timestamp);
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const isoDate = `${y}-${m}-${d}`;
+
+    // Range: 2025-05-18 to 2025-05-25 (inclusive)
+    return isoDate >= '2025-05-18' && isoDate <= '2025-05-25';
+  };
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <AppHeader 
@@ -295,22 +307,11 @@ const AnomalyDetectionPage: React.FC = () => {
                       <StyledTableCell>
                         <Box sx={{ display: 'flex', alignItems: 'center' }}>
                           {row.anomalyType}
-                          {!(
-                            (row.anomalyType === "Physical damage" &&
-                              (row.location === "Mahdia" || row.location === "A - Panel 1") &&
-                              new Date(row.timestamp).toLocaleDateString() === "20/05/2025") ||
-                            (row.anomalyType === "snowy" &&
-                              (row.location === "Mahdia" || row.location === "A - Panel 1") &&
-                              new Date(row.timestamp).toLocaleDateString() === "18/05/2025") ||
-                            (row.anomalyType === "dusty" &&
-                              (row.location === "Mahdia" || row.location === "A - Panel 1") &&
-                              new Date(row.timestamp).toLocaleDateString() === "18/05/2025")
-                          ) &&
-                            row.image && (
-                              <IconButton size="small" sx={{ ml: 1 }} onClick={() => handleViewImage(row.image)}>
-                                <VisibilityIcon fontSize="small" />
-                              </IconButton>
-                            )}
+                          {!shouldHideImage(row) && row.image && (
+                            <IconButton size="small" sx={{ ml: 1 }} onClick={() => handleViewImage(row.image)}>
+                              <VisibilityIcon fontSize="small" />
+                            </IconButton>
+                          )}
                         </Box>
                       </StyledTableCell>
                       <StyledTableCell>
@@ -340,7 +341,7 @@ const AnomalyDetectionPage: React.FC = () => {
                         </Box>
                       </StyledTableCell>
                       <StyledTableCell>
-                        {row.location === 'A - Panel 1' ? 'Mahdia' : row.location}
+                        {row.location}
                       </StyledTableCell>
                     </StyledTableRow>
                   ))}

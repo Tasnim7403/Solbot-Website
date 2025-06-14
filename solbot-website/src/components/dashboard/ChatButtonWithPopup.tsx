@@ -7,13 +7,26 @@ const DEEPINFRA_API_KEY = 'HnMvaqDoVmQe8NUtzhVGF68akrwztwmf';
 const DEEPINFRA_API_URL = 'https://api.deepinfra.com/v1/openai/chat/completions';
 const MODEL = 'meta-llama/Meta-Llama-3-8B-Instruct';
 
-const SYSTEM_PROMPT = 'You are SolBot Assistant, an expert in solar panel systems. Answer as helpfully and clearly as possible.';
+const SYSTEM_PROMPT = `
+You are SolBot Assistant, an expert in solar energy, solar panel maintenance, and autonomous robot operations for solar farms.
+You help users with questions about:
+- Solar panel performance and troubleshooting
+- Robot navigation, missions, and return-to-station operations
+- Interpreting dashboard data (energy, anomalies, weather, battery, mission status, etc.)
+Always provide clear, concise, and actionable answers tailored to the SolBot system.
+`;
 
 const anomalyKeywords = [
   'anomaly', 'last anomaly', 'latest anomaly', 'detected anomaly', 'anomalies', 'recent anomaly', 'anomaly detection'
 ];
 const weatherKeywords = [
   'weather', 'temperature', 'humidity', 'wind', 'rain', 'snow', 'forecast', 'climate'
+];
+const batteryKeywords = [
+  'battery', 'battery level', 'robot battery', 'battery status', 'charge', 'charging'
+];
+const missionKeywords = [
+  'mission', 'start mission', 'mission status', 'return to station', 'robot mission', 'mission progress', 'mission active'
 ];
 
 const ChatButtonWithPopup: React.FC = () => {
@@ -64,6 +77,32 @@ const ChatButtonWithPopup: React.FC = () => {
     }
   };
 
+  const fetchBatteryStatus = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/robot/status');
+      const data = await res.json();
+      if (data && typeof data.battery === 'number') {
+        return `Robot battery level: ${data.battery}%.`;
+      }
+      return 'Battery status not available.';
+    } catch {
+      return 'Could not fetch battery status.';
+    }
+  };
+
+  const fetchMissionStatus = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/robot/mission-status');
+      const data = await res.json();
+      if (data && data.status) {
+        return `Current mission status: ${data.status}.`;
+      }
+      return 'Mission status not available.';
+    } catch {
+      return 'Could not fetch mission status.';
+    }
+  };
+
   const handleSend = async () => {
     if (!input.trim()) return;
     const userMsg = input;
@@ -72,12 +111,18 @@ const ChatButtonWithPopup: React.FC = () => {
     setError('');
     let context = '';
     let newMessages = [...messages, { role: 'user', text: userMsg }];
-    // Check for anomaly or weather keywords
+    // Check for anomaly, weather, battery, or mission keywords
     if (containsKeyword(userMsg, anomalyKeywords)) {
       context += await fetchLatestAnomaly() + '\n';
     }
     if (containsKeyword(userMsg, weatherKeywords)) {
       context += await fetchWeather() + '\n';
+    }
+    if (containsKeyword(userMsg, batteryKeywords)) {
+      context += await fetchBatteryStatus() + '\n';
+    }
+    if (containsKeyword(userMsg, missionKeywords)) {
+      context += await fetchMissionStatus() + '\n';
     }
     // If context was found, prepend it to the user message
     let aiMessages = [

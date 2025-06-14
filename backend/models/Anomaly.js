@@ -32,7 +32,7 @@ const anomalySchema = new mongoose.Schema({
     },
     location: {
         type: String,
-        default: 'A - Panel 1'
+        default: 'Panel Section A'
     },
     image: {
         type: String, // base64 string or URL

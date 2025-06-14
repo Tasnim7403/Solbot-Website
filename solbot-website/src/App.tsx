@@ -19,6 +19,7 @@ import StaffManagementPage from './components/staff/StaffManagementPage';
 import PeoplePage from './components/people/PeoplePage';
 import NotificationsPage from './components/notifications/NotificationsPage';
 import UsersPage from './components/users/UsersPage';
+import MapDisplay from './components/map/MapDisplay';
 
 const App: React.FC = () => {
   return (

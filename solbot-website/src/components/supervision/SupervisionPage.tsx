@@ -26,6 +26,7 @@ import styled from 'styled-components';
 import Sidebar from '../dashboard/Sidebar';
 import AppHeader from '../common/Header';
 import axios from 'axios';
+import { socket } from '../../socket';
 
 const SupervisionContainer = styled(Box)`
   display: flex;
@@ -410,12 +411,10 @@ const SupervisionPage: React.FC = () => {
   });
   const [movementSpeed, setMovementSpeed] = useState<number | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [location, setLocation] = useState('');
+  const [location, setLocation] = useState('Panel Section A');
   const [weather, setWeather] = useState<any>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState('');
-  const [locationLoading, setLocationLoading] = useState(true);
-  const [locationError, setLocationError] = useState('');
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [signalStrength, setSignalStrength] = useState<number>(84);
@@ -492,19 +491,6 @@ const SupervisionPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    setLocationLoading(true);
-    axios.get('http://localhost:5000/api/weather/location')
-      .then(res => {
-        setLocation(res.data.location);
-        setLocationLoading(false);
-      })
-      .catch(() => {
-        setLocationError('Could not fetch location');
-        setLocationLoading(false);
-      });
-  }, []);
-
-  useEffect(() => {
     setWeatherLoading(true);
     setWeatherError('');
     axios.get('http://localhost:5000/api/weather')
@@ -517,19 +503,27 @@ const SupervisionPage: React.FC = () => {
         setWeatherLoading(false);
         setWeatherError('Could not fetch weather data');
       });
-  }, [location]);
+  }, []);
 
-  const handleLocationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newLocation = e.target.value;
-    setLocation(newLocation);
-  };
+  useEffect(() => {
+    function handleRobotStatus(data: any) {
+      setWsConnected(!!data.connected);
+    }
+    socket.on('robot_connection_status', handleRobotStatus);
 
-  const handleLocationBlur = () => {
-    if (!location) return;
-    axios.put('/api/weather/location', { location })
-      .then(res => setLocation(res.data.location))
-      .catch(() => setLocationError('Could not update location'));
+    // Listen for robot_update and update movementSpeed
+    function handleRobotUpdate(message: any) {
+      if (message && message.data && message.data.speed && typeof message.data.speed.linear_mps === 'number') {
+        setMovementSpeed(message.data.speed.linear_mps);
+      }
+    }
+    socket.on('robot_update', handleRobotUpdate);
+
+    return () => {
+      socket.off('robot_connection_status', handleRobotStatus);
+      socket.off('robot_update', handleRobotUpdate);
   };
+  }, []);
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -605,11 +599,9 @@ const SupervisionPage: React.FC = () => {
               </VideoContainer>
 
               <Stack direction="row" spacing={2} alignItems="center" mb={2}>
-                {location && (
                   <Typography variant="h6" color="text.secondary">
                     {location}
                   </Typography>
-                )}
                 {weatherLoading && <Typography variant="body2">Loading weather...</Typography>}
                 {weatherError && <Typography variant="body2" color="error">{weatherError}</Typography>}
                 {weather && (
@@ -686,7 +678,9 @@ const SupervisionPage: React.FC = () => {
 
               <StatusItem>
                 <Typography variant="body2" color="text.secondary">Speed:</Typography>
-                <StatusValue variant="body2">{movementSpeed !== null ? `${movementSpeed.toFixed(2)} m/s` : ''}</StatusValue>
+                <StatusValue variant="body2">
+                  {movementSpeed !== null ? `${movementSpeed.toFixed(2)} m/s` : 'Loading...'}
+                </StatusValue>
               </StatusItem>
 
                   <StatusItem>

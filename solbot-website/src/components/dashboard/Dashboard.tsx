@@ -13,6 +13,8 @@ import {
   Menu,
   MenuItem,
   Container,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import {
   NotificationsNone as NotificationsIcon,
@@ -41,9 +43,36 @@ import {
 import axios from 'axios';
 import moment from 'moment-timezone';
 import ChatButtonWithPopup from './ChatButtonWithPopup';
+import type { YAxisProps } from 'recharts';
+import { useNotificationContext } from '../../contexts/NotificationContext';
+import { socket } from '../../socket';
+import MuiAlert from '@mui/material/Alert';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 // Create a typed version of Grid to avoid the TypeScript errors
 const Grid = MuiGrid as React.ComponentType<any>;
+
+// Type for energy data points used in the trend chart
+export type EnergyDataPoint = {
+  timestamp: number;
+  avgCurrent: number;
+  avgEnergy: number;
+  avgEfficiency: number;
+};
+
+// DEFINE THE PRE-SET MISSION PATH HERE
+const PREDEFINED_MISSION_WAYPOINTS = [
+  { x: -1.905, y: -0.648 },  // Target 1 is P2
+  { x: -2.012, y: 0.448 },   // Target 2 is P3
+  { x: -1.478, y: 0.716 },   // Target 3 is P4
+  { x: -0.556, y: 0.442 },   // Target 4 is P5
+  { x: 0.428,  y: 0.186 }    // Target 5 is P1 (return to start)
+];
+
+// DEFINE THE RETURN TO STATION WAYPOINT
+const RETURN_TO_STATION_WAYPOINT = [
+  { x: -1.905, y: -0.648 }
+];
 
 const DashboardContainer = styled(Box)`
   display: flex;
@@ -221,16 +250,6 @@ const EmergencyButton = styled(Button)`
   }
 `;
 
-const mockData = [
-  { day: 'Day 1', kw: 100, efficiency: 85 },
-  { day: 'Day 2', kw: 200, efficiency: 87 },
-  { day: 'Day 3', kw: 300, efficiency: 92 },
-  { day: 'Day 4', kw: 200, efficiency: 88 },
-  { day: 'Day 5', kw: 400, efficiency: 95 },
-  { day: 'Day 6', kw: 300, efficiency: 90 },
-  { day: 'Day 7', kw: 350, efficiency: 93 },
-];
-
 const FILTER_KEY = 'dashboard_timeRange';
 
 const PanelCard = styled(Paper)<{ isMobile?: boolean; isLast?: boolean }>`
@@ -281,29 +300,31 @@ const Dashboard: React.FC = () => {
   const [filterAnchorEl, setFilterAnchorEl] = useState<HTMLElement | null>(null);
   const [timeRange, setTimeRange] = useState(() => localStorage.getItem(FILTER_KEY) || 'week');
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
-  const [energyData, setEnergyData] = useState([]);
+  const [energyData, setEnergyData] = useState<EnergyDataPoint[]>([]);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
-  const [wsConnected, setWsConnected] = useState(false);
+  const [robotConnected, setRobotConnected] = useState(false);
   const [battery] = useState<number>(84);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [isMissionActive, setIsMissionActive] = useState(false);
-  
+  const { markAllAsRead } = useNotificationContext();
+  const [missionSnackbarOpen, setMissionSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
   };
   
   const handleNotificationClick = async (event: React.MouseEvent<HTMLElement>) => {
     setNotificationAnchorEl(event.currentTarget);
+    markAllAsRead();
     const unread = notifications.filter((n: any) => !n.read);
     if (unread.length > 0) {
       try {
         await Promise.all(unread.map((n: any) => axios.put(`http://localhost:5000/api/notifications/${n._id}/read`)));
         const updated = notifications.map((n: any) => ({ ...n, read: true }));
         setNotifications(updated);
-        setUnreadCount(0);
       } catch {}
     }
   };
@@ -321,10 +342,21 @@ const Dashboard: React.FC = () => {
   };
   
   const fetchEnergyData = async (range: string, date: Date) => {
-    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const dateStr = moment(date).tz(userTimezone).format('YYYY-MM-DD');
-    const res = await axios.get(`http://localhost:5000/api/energy/aggregate?filter=${range}&date=${dateStr}&timezone=${encodeURIComponent(userTimezone)}`);
-    setEnergyData(res.data);
+    // Use local time for the date string
+    const dateStr = moment(date).format('YYYY-MM-DD');
+    const res = await axios.get(`http://localhost:5000/api/energy/aggregate?filter=${range}&date=${dateStr}&timezone=Africa/Tunis`);
+    // Map backend fields to frontend expected fields
+    let filtered = res.data;
+    if (range === 'month') {
+      filtered = res.data.filter((d: any) => d.count > 0 && d.timestamp);
+    }
+    const mapped = filtered.map((d: any) => ({
+      ...d,
+      avgCurrent: d.current ?? d.currentAmps ?? null,
+      avgEnergy: d.energy ?? null,
+      avgEfficiency: d.efficiency ?? null,
+    }));
+    setEnergyData(mapped);
   };
 
   useEffect(() => {
@@ -362,19 +394,27 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:9090');
-    ws.onopen = () => {
-      setWsConnected(true);
-      ws.send(JSON.stringify({ op: 'subscribe', topic: '/robot_status', type: 'custom/RobotStatus' }));
-    };
-    ws.onclose = () => setWsConnected(false);
-    ws.onerror = () => setWsConnected(false);
-    ws.onmessage = (event) => {
+    // Fetch current robot status on mount
+    const fetchRobotStatus = async () => {
       try {
-        const msg = JSON.parse(event.data);
-      } catch (e) {}
+        const response = await axios.get('http://localhost:5000/api/robot/status');
+        setRobotConnected(!!response.data.connected);
+        console.log('Fetched robot status via REST:', response.data);
+      } catch (error) {
+        setRobotConnected(false);
+        console.error('Error fetching robot status:', error);
+      }
     };
-    return () => ws.close();
+    fetchRobotStatus();
+
+    function handleRobotStatus(data: any) {
+      setRobotConnected(!!data.connected);
+      console.log('robot_connection_status event:', data);
+    }
+    socket.on('robot_connection_status', handleRobotStatus);
+    return () => {
+      socket.off('robot_connection_status', handleRobotStatus);
+    };
   }, []);
 
   // Fetch notifications on mount
@@ -385,14 +425,71 @@ const Dashboard: React.FC = () => {
         // Sort notifications by timestamp descending
         const sorted = (res.data as any[]).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setNotifications(sorted);
-        setUnreadCount(sorted.filter((n: any) => !n.read).length);
       } catch (err) {
         setNotifications([]);
-        setUnreadCount(0);
       }
     };
     fetchNotifications();
   }, []);
+
+  const validEnergyData = energyData
+    .map(d => ({
+      ...d,
+      timestamp: typeof d.timestamp === 'string' ? new Date(d.timestamp).getTime() : d.timestamp
+    }))
+    .filter(
+      d =>
+        d &&
+        typeof d.timestamp === 'number' &&
+        !isNaN(d.timestamp)
+    );
+  const allDataValid = validEnergyData.length > 0;
+
+  const handleStartMission = async () => {
+    console.log("Start Mission button clicked. Sending predefined waypoints.");
+    const missionData = {
+      type: "start_mission",
+      waypoints: PREDEFINED_MISSION_WAYPOINTS
+    };
+    try {
+      await fetch('http://localhost:5000/api/start-mission', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(missionData),
+      });
+      setSnackbarMessage('Mission start command has been successfully sent to the robot.');
+      setMissionSnackbarOpen(true);
+      console.log("Successfully sent mission command:", missionData);
+    } catch (error) {
+      alert('Failed to send mission command. See console for details.');
+      console.error("Error sending mission start command:", error);
+    }
+  };
+
+  const handleReturnToStation = async () => {
+    console.log("Return to Station clicked. Sending return waypoint.");
+    const missionData = {
+      type: "return_to_station",
+      waypoints: RETURN_TO_STATION_WAYPOINT
+    };
+    try {
+      await fetch('http://localhost:5000/api/start-mission', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(missionData),
+      });
+      setSnackbarMessage('Return to Station command has been successfully sent to the robot.');
+      setMissionSnackbarOpen(true);
+      console.log("Successfully sent return to station command:", missionData);
+    } catch (error) {
+      alert('Failed to send return to station command. See console for details.');
+      console.error("Error sending return to station command:", error);
+    }
+  };
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -425,9 +522,9 @@ const Dashboard: React.FC = () => {
               <PanelCard elevation={0} isMobile={isMobile}>
                 <Typography color="text.secondary" variant={isMobile ? "body2" : "body1"}>Robot Status</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                  <StatusIndicator color={wsConnected ? "#4caf50" : "#f44336"} />
+                  <StatusIndicator color={robotConnected ? "#4caf50" : "#f44336"} />
                   <Typography variant={isMobile ? "subtitle2" : "h6"} fontWeight="600">
-                    {wsConnected ? "Active" : "Inactive"}
+                    {robotConnected ? "Active" : "Inactive"}
                   </Typography>
                 </Box>
               </PanelCard>
@@ -459,11 +556,12 @@ const Dashboard: React.FC = () => {
                     variant="contained"
                     color="primary"
                     sx={{ mt: 1, fontWeight: 700, borderRadius: '8px', background: '#1a237e', boxShadow: 'none', minWidth: isMobile ? 100 : 140, padding: isMobile ? '6px 12px' : '8px 24px', fontSize: isMobile ? '0.9rem' : '1rem', '&:hover': { background: '#3949ab' } }}
-                    onClick={() => console.log('Return to Station clicked')}
+                    onClick={handleReturnToStation}
                   >
                     Return to Station
                   </Button>
                   <Button
+                    id="start-mission-btn"
                     variant="contained"
                     sx={{
                       mt: 1,
@@ -481,7 +579,7 @@ const Dashboard: React.FC = () => {
                         boxShadow: 'none',
                       },
                     }}
-                    onClick={() => setIsMissionActive((prev) => !prev)}
+                    onClick={handleStartMission}
                   >
                     Start Mission
                   </Button>
@@ -521,12 +619,12 @@ const Dashboard: React.FC = () => {
             </Box>
             <RechartsResponsiveContainer width="100%" height={isMobile ? 300 : 450} isMobile={isMobile}>
               <LineChart
-                data={energyData}
-                margin={{ 
-                  top: 5, 
-                  right: isMobile ? 15 : 35, 
-                  left: isMobile ? 0 : 25, 
-                  bottom: 0 
+                data={allDataValid ? validEnergyData : []}
+                margin={{
+                  top: 5,
+                  right: 40,
+                  left: 60,
+                  bottom: 0
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -541,7 +639,7 @@ const Dashboard: React.FC = () => {
                   tickFormatter={value => {
                     if (timeRange === 'day') {
                       const d = new Date(value);
-                      return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes() < 30 ? '00' : '30'} UTC`;
+                      return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes() < 30 ? '00' : '30'}`;
                     }
                     if (timeRange === 'week') return `Day ${value}`;
                     if (timeRange === 'month') return `Week ${value}`;
@@ -551,10 +649,44 @@ const Dashboard: React.FC = () => {
                   axisLine={{ stroke: '#e0e0e0' }}
                 />
                 <YAxis 
-                  tick={{ fontSize: isMobile ? 10 : 12 }}
+                  yAxisId="left"
+                  tick={{ fontSize: isMobile ? 14 : 16 }}
                   axisLine={{ stroke: '#e0e0e0' }}
+                  label={{
+                    value: 'Energy Production (kWh)',
+                    angle: -90,
+                    position: 'insideLeft',
+                    offset: 0,
+                    fontSize: isMobile ? 14 : 16,
+                    fill: '#000080',
+                    fontWeight: 700
+                  }}
+                />
+                <YAxis 
+                  yAxisId="right"
+                  orientation="right"
+                  tick={{ fontSize: isMobile ? 14 : 16 }}
+                  axisLine={{ stroke: '#e0e0e0' }}
+                  label={{
+                    value: 'Efficiency (%)',
+                    angle: 90,
+                    position: 'insideRight',
+                    offset: 0,
+                    fontSize: isMobile ? 14 : 16,
+                    fill: '#4caf50',
+                    fontWeight: 700
+                  }}
                 />
                 <Tooltip 
+                  formatter={(value, name) => {
+                    if (name === 'Energy Production (kW)' || name === 'Energy Production (kWh)') {
+                      return [`${value} kWh`, 'Energy Production (kWh)'];
+                    }
+                    if (name === 'Efficiency (%)') {
+                      return [`${value} %`, 'Efficiency (%)'];
+                    }
+                    return [value, name];
+                  }}
                   contentStyle={{ 
                     borderRadius: '8px', 
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
@@ -567,22 +699,14 @@ const Dashboard: React.FC = () => {
                   iconType="circle"
                 />
                 <Line
-                  name="Current (A)"
-                  type="monotone"
-                  dataKey="avgCurrent"
-                  stroke="#000080"
-                  strokeWidth={2}
-                  dot={{ r: 6, strokeWidth: 2 }}
-                  activeDot={{ r: 8, strokeWidth: 2 }}
-                />
-                <Line
-                  name="Energy Production (kW)"
+                  name="Energy Production (kWh)"
                   type="monotone"
                   dataKey="avgEnergy"
                   stroke="#000080"
                   strokeWidth={2}
                   dot={{ r: isMobile ? 4 : 6, strokeWidth: 2 }}
                   activeDot={{ r: isMobile ? 6 : 8, strokeWidth: 2 }}
+                  yAxisId="left"
                 />
                 <Line
                   name="Efficiency (%)"
@@ -592,6 +716,7 @@ const Dashboard: React.FC = () => {
                   strokeWidth={2}
                   dot={{ r: isMobile ? 4 : 6, strokeWidth: 2 }}
                   activeDot={{ r: isMobile ? 6 : 8, strokeWidth: 2 }}
+                  yAxisId="right"
                 />
               </LineChart>
             </RechartsResponsiveContainer>
@@ -644,6 +769,23 @@ const Dashboard: React.FC = () => {
         <MenuItem onClick={handleMenuClose}>Custom Range</MenuItem>
       </Menu>
       <ChatButtonWithPopup />
+      <Snackbar
+        open={missionSnackbarOpen}
+        autoHideDuration={5000}
+        onClose={() => setMissionSnackbarOpen(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <MuiAlert
+          onClose={() => setMissionSnackbarOpen(false)}
+          severity="success"
+          iconMapping={{ success: <CheckCircleIcon fontSize="inherit" sx={{ color: '#4caf50' }} /> }}
+          sx={{ width: '100%', alignItems: 'center', fontWeight: 600, fontSize: '1.1rem', background: '#e8f5e9', color: '#388e3c' }}
+          elevation={6}
+          variant="filled"
+        >
+          {snackbarMessage}
+        </MuiAlert>
+      </Snackbar>
     </Box>
   );
 };
